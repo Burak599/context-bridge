@@ -1,4 +1,4 @@
-# ai-project-memory
+# ContextBridge
 
 AI Project Memory is an MVP system that analyzes a project's codebase and AI chat history, then turns them into one reusable context prompt for future AI assistants.
 
