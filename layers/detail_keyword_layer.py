@@ -131,7 +131,9 @@ class DetailKeywordExtractorLayer:
             _debug(f"Chunk {chunk_number} PARSE FAIL: empty LLM response")
             return empty
 
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # If an unclosed <think> tag remains, discard everything from that point on
         if "<think>" in cleaned:
             cleaned = cleaned[: cleaned.index("<think>")].strip()
 
@@ -139,7 +141,9 @@ class DetailKeywordExtractorLayer:
             _debug(f"Chunk {chunk_number} PARSE FAIL: only thinking content")
             return empty
 
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end = cleaned.rfind("}") + 1
         if start == -1 or end <= start:

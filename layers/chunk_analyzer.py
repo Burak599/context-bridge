@@ -47,30 +47,30 @@ Primary project detection:
 - Decisions and open questions should reflect the primary project. Mention side topics only in "context" and only if they are directly relevant.
 - If you are unsure which is the primary project, look for: what the user asks the most questions about, what they are building themselves, what they return to repeatedly."""
 
-MAX_CONCURRENT = 5   # aynı anda max istek sayısı
-MAX_RETRIES    = 6   # rate limit retry
-BASE_WAIT      = 2   # exponential backoff başlangıcı
+MAX_CONCURRENT = 5   # max number of concurrent requests
+MAX_RETRIES    = 6   # rate limit retry count
+BASE_WAIT      = 2   # exponential backoff starting value
 
 
 class ChunkAnalyzer:
     """
-    Her chunk'ı paralel olarak LLM'e gönderir ve yapılandırılmış bilgi çıkarır.
-    asyncio.gather + Semaphore ile aynı anda MAX_CONCURRENT istek gönderir.
+    Sends each chunk to the LLM in parallel and extracts structured information.
+    Uses asyncio.gather + Semaphore to keep concurrent requests at MAX_CONCURRENT.
     """
 
     def __init__(self, llm_client=None):
-        # llm_client uyumluluk için tutuldu ama kullanılmıyor
+        # llm_client is kept for compatibility but not used
         self._async_client = AsyncGroq(api_key=config.get_groq_key())
 
     def analyze_all(self, chunk_texts: List[str]) -> List[Dict]:
         """
-        Tüm chunk'ları paralel analiz eder.
+        Analyzes all chunks in parallel.
 
         Args:
-            chunk_texts: chunker.get_chunk_texts() çıktısı
+            chunk_texts: Output of chunker.get_chunk_texts()
 
         Returns:
-            Her chunk için analiz sonucu dict listesi (sıra korunur)
+            List of analysis result dicts per chunk (order preserved)
         """
         return asyncio.run(self._analyze_all_async(chunk_texts))
 
@@ -95,7 +95,7 @@ class ChunkAnalyzer:
         semaphore: asyncio.Semaphore,
     ) -> Dict:
         async with semaphore:
-            print(f"[Katman 3]   Chunk {chunk_number}/{total} analiz ediliyor...")
+            print(f"[Layer 3]   Analyzing chunk {chunk_number}/{total}...")
             user_message = f"Analyze this conversation chunk:\n\n{chunk_text}"
 
             for attempt in range(MAX_RETRIES):
@@ -115,13 +115,13 @@ class ChunkAnalyzer:
                     err = str(e)
                     if "rate_limit" in err or "429" in err:
                         wait = BASE_WAIT ** attempt
-                        print(f"[Katman 3]   Chunk {chunk_number} rate limit — {wait}s bekleniyor...")
+                        print(f"[Layer 3]   Chunk {chunk_number} rate limit — waiting {wait}s...")
                         await asyncio.sleep(wait)
                     else:
-                        print(f"[Katman 3] Hata (chunk {chunk_number}): {e}")
+                        print(f"[Layer 3] Error (chunk {chunk_number}): {e}")
                         return self._empty_result(chunk_number)
 
-            print(f"[Katman 3] Chunk {chunk_number} max retry aşıldı.")
+            print(f"[Layer 3] Chunk {chunk_number} max retries exceeded.")
             return self._empty_result(chunk_number)
 
     # ------------------------------------------------------------------
@@ -129,9 +129,12 @@ class ChunkAnalyzer:
     # ------------------------------------------------------------------
 
     def _parse_response(self, response: str, chunk_number: int) -> Dict:
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
 
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end   = cleaned.rfind("}") + 1
         if start != -1 and end > start:
@@ -148,7 +151,7 @@ class ChunkAnalyzer:
                 "context":        data.get("context", ""),
             }
         except json.JSONDecodeError:
-            print(f"[Katman 3] JSON parse hatası (chunk {chunk_number})")
+            print(f"[Layer 3] JSON parse error (chunk {chunk_number})")
             return self._empty_result(chunk_number)
 
     def _empty_result(self, chunk_number: int) -> Dict:

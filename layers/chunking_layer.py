@@ -48,11 +48,11 @@ class ChunkingLayer:
         if len(messages) <= self.min_size:
             return [messages]
 
-        print(f"[Katman 2] {len(messages)} mesaj işleniyor...")
+        print(f"[Layer 2] Processing {len(messages)} messages...")
         blocks = self._build_blocks(messages)
-        print(f"[Katman 2] {len(blocks)} blok oluşturuldu, paralel gönderiliyor...")
+        print(f"[Layer 2] {len(blocks)} blocks created, sending in parallel...")
 
-        # Paralel blok analizi
+        # Parallel block analysis
         results = asyncio.run(self._detect_all_breaks(blocks))
 
         all_break_points = set()
@@ -63,7 +63,7 @@ class ChunkingLayer:
         chunks = self._split_by_breaks(messages, sorted(all_break_points))
         chunks = self._merge_small_chunks(chunks)
 
-        print(f"[Katman 2] ✓ {len(messages)} mesaj → {len(chunks)} chunk")
+        print(f"[Layer 2] ✓ {len(messages)} messages → {len(chunks)} chunks")
         return chunks
 
     def get_chunk_texts(self, chunks: List[List[Dict[str, str]]]) -> List[str]:
@@ -90,7 +90,7 @@ class ChunkingLayer:
 
     async def _detect_breaks_async(self, block_msgs, offset, idx, total, semaphore):
         async with semaphore:
-            print(f"[Katman 2]   Blok {idx}/{total} analiz ediliyor ({len(block_msgs)} mesaj)...")
+            print(f"[Layer 2]   Analyzing block {idx}/{total} ({len(block_msgs)} messages)...")
             formatted = self._format_block_for_llm(block_msgs)
             user_message = f"Find topic changes in this conversation:\n\n{formatted}"
 
@@ -113,10 +113,10 @@ class ChunkingLayer:
                     err = str(e)
                     if "rate_limit" in err or "429" in err:
                         wait = BASE_WAIT ** attempt
-                        print(f"[Katman 2]   Blok {idx} rate limit — {wait}s bekleniyor...")
+                        print(f"[Layer 2]   Block {idx} rate limit — waiting {wait}s...")
                         await asyncio.sleep(wait)
                     else:
-                        print(f"[Katman 2] Blok {idx} hata: {e}")
+                        print(f"[Layer 2] Block {idx} error: {e}")
                         return ([], offset)
 
             return ([], offset)
@@ -179,7 +179,9 @@ class ChunkingLayer:
         return "\n\n".join(lines)
 
     def _parse_llm_response(self, response: str) -> List[int]:
+        # Strip <think>...</think> chain-of-thought blocks if present
         response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned  = re.sub(r"```(?:json)?", "", response).replace("```", "").strip()
         match    = re.search(r"\[.*?\]", cleaned, re.DOTALL)
         if not match:

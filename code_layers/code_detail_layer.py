@@ -8,6 +8,8 @@ import config
 
 MAX_VARIABLES_PER_FILE = 5
 
+# System prompt for the code detail extractor LLM.
+# Instructs the model to pick only the most important variables/parameters per file.
 CODE_DETAIL_EXTRACTOR_SYSTEM_PROMPT = """You are an expert code analyst. You read ONE source file and pick ONLY the most important variables/parameters and their values.
 You only extract values that are explicitly visible in the provided file. Do not infer or invent missing values.
 
@@ -90,6 +92,7 @@ class CodeDetailExtractorLayer:
         path = file_info["path"]
         content = file_info.get("content", "") or ""
 
+        # Skip files with no meaningful content
         if not content.strip():
             _debug(f"{path} SKIP: empty file content")
             return {"index": index, "file": path, "variables": []}
@@ -117,6 +120,7 @@ class CodeDetailExtractorLayer:
             _debug(f"{path} LLM EXCEPTION: {type(e).__name__}: {e}")
             parsed = {"index": index, "file": path, "variables": []}
 
+        # Sanitize: enforce strict variable format and apply per-file cap
         before_vars = len(parsed["variables"])
         parsed["variables"] = _enforce_variables_only(parsed["variables"])
 
@@ -131,18 +135,24 @@ class CodeDetailExtractorLayer:
 
     def _parse_response(self, response: str, index: int, file_path: str) -> Dict:
         empty = {"index": index, "file": file_path, "variables": []}
+
         if not response or not response.strip():
             _debug(f"{file_path} PARSE FAIL: empty response")
             return empty
 
+        # Remove <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Also truncate at any unclosed <think> tag
         if "<think>" in cleaned:
             cleaned = cleaned[: cleaned.index("<think>")].strip()
         if not cleaned:
             _debug(f"{file_path} PARSE FAIL: only thinking tags. Head: {response[:200]!r}")
             return empty
 
+        # Strip markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
+
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end = cleaned.rfind("}") + 1
         if start == -1 or end <= start:
@@ -186,9 +196,12 @@ class CodeDetailMergeLayer:
                 name = str(var.get("name", "")).strip()
                 value = str(var.get("value", "")).strip()
                 kind = str(var.get("kind", "")).strip() or "variable"
+
+                # Skip entries with missing fields or invalid kind
                 if not name or not value or kind not in {"variable", "parameter"}:
                     continue
 
+                # Deduplicate by normalized name+value+kind key
                 key = _norm(f"{name}={value}:{kind}")
                 if key in seen:
                     continue
@@ -203,6 +216,7 @@ class CodeDetailMergeLayer:
                 file_variables.append(normalized)
                 flat_variables.append(normalized)
 
+                # Respect per-file variable cap
                 if len(file_variables) >= MAX_VARIABLES_PER_FILE:
                     break
 
@@ -221,10 +235,12 @@ class CodeDetailMergeLayer:
 
 
 def _norm(text: str) -> str:
+    """Normalize whitespace and lowercase a string for deduplication."""
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
 def _to_memory_text(file_blocks: List[Dict]) -> str:
+    """Serialize merged file blocks into a human-readable memory text block."""
     lines = [
         "CODE VARIABLE PARAMETER MEMORY",
         "",
@@ -234,22 +250,30 @@ def _to_memory_text(file_blocks: List[Dict]) -> str:
     for block in file_blocks:
         file_path = block.get("file", "")
         variables = block.get("variables", [])
-        lines.extend(["", f"{file_path} scripti"])
+        lines.extend(["", f"{file_path} script"])
         if not variables:
-            lines.append("(önemli değişken/parametre bulunamadı)")
+            lines.append("(no important variables/parameters found)")
             continue
 
         for v in variables[:MAX_VARIABLES_PER_FILE]:
-            label = "parametre" if v.get("kind") == "parameter" else "değişken"
+            label = "parameter" if v.get("kind") == "parameter" else "variable"
             lines.append(f"{label} {v.get('name', '')}={v.get('value', '')}")
 
     return "\n".join(lines).strip()
 
 
+# Regex to validate that a variable name is a proper Python identifier
 _STRICT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _enforce_variables_only(variables: List[Dict]) -> List[Dict]:
+    """
+    Sanitizes the raw LLM variable list:
+    - Drops entries with missing/invalid fields
+    - Enforces strict identifier format for names
+    - Deduplicates by normalized key
+    - Caps output at MAX_VARIABLES_PER_FILE
+    """
     out: List[Dict] = []
     seen = set()
     for item in variables:

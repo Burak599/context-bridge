@@ -72,11 +72,11 @@ class FinalMemoryLayer:
         return ""
 
     def _generate_from_list(self, merged_list: List[Dict]) -> str:
-        print(f"[Katman 5] {len(merged_list)} grup için kısmi hafızalar oluşturuluyor...")
+        print(f"[Layer 5] Generating partial memories for {len(merged_list)} groups...")
 
         partial_memories = []
         for i, merged in enumerate(merged_list):
-            print(f"[Katman 5] Grup {i+1}/{len(merged_list)} özeti oluşturuluyor...")
+            print(f"[Layer 5] Generating summary for group {i+1}/{len(merged_list)}...")
             partial = self._generate_partial(merged, i + 1)
             if partial:
                 partial_memories.append(partial)
@@ -87,12 +87,12 @@ class FinalMemoryLayer:
         if len(partial_memories) == 1:
             return partial_memories[0]
 
-        print(f"[Katman 5] {len(partial_memories)} kısmi hafıza birleştiriliyor...")
+        print(f"[Layer 5] Combining {len(partial_memories)} partial memories...")
         return self._combine_memories(partial_memories)
 
     def _generate_partial(self, merged: Dict, group_num: int) -> str:
         user_message = f"Convert this conversation summary into a memory paragraph:\n\n{json.dumps(merged, indent=2)}"
-        print(f"[Katman 5] Grup {group_num}: {len(user_message)} karakter gönderiliyor...")
+        print(f"[Layer 5] Group {group_num}: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(
                 config.LAYER_5_MODEL,
@@ -102,13 +102,13 @@ class FinalMemoryLayer:
             cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             return cleaned
         except Exception as e:
-            print(f"[Katman 5] Grup {group_num} hata: {e}")
+            print(f"[Layer 5] Group {group_num} error: {e}")
             return ""
 
     def _combine_memories(self, memories: List[str]) -> str:
         combined_text = "\n\n---\n\n".join(memories)
         user_message  = f"Combine these memory paragraphs into one unified memory document:\n\n{combined_text}"
-        print(f"[Katman 5] Birleştirme: {len(user_message)} karakter gönderiliyor...")
+        print(f"[Layer 5] Combining: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(
                 config.LAYER_5_MODEL,
@@ -118,12 +118,12 @@ class FinalMemoryLayer:
             cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             return cleaned
         except Exception as e:
-            print(f"[Katman 5] Birleştirme hatası: {e}")
+            print(f"[Layer 5] Combine error: {e}")
             return "\n\n".join(memories)
 
     def _generate_single(self, merged: Dict) -> str:
         """Legacy single dict behavior."""
-        print("[Katman 5] Final hafıza oluşturuluyor...")
+        print("[Layer 5] Generating final memory...")
         user_message = f"Convert this conversation summary into a memory document:\n\n{json.dumps(merged, indent=2)}"
         try:
             response = self.llm.chat(
@@ -134,5 +134,5 @@ class FinalMemoryLayer:
             cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             return cleaned
         except Exception as e:
-            print(f"[Katman 5] Hata: {e}")
+            print(f"[Layer 5] Error: {e}")
             return ""

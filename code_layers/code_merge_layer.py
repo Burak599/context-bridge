@@ -6,6 +6,7 @@ from typing import List, Dict
 from layers.llm_client import LLMClient
 import config
 
+# System prompt for merging file summaries and a relation map into one unified project summary.
 CODE_MERGE_SYSTEM_PROMPT = """You are a data consolidation expert. You will receive:
 1. A list of individual file summaries (from a code analyzer)
 2. A relationship map between those files (from a relation analyzer)
@@ -37,6 +38,7 @@ Rules:
 - Be concise. No fluff.
 - Return ONLY the JSON object. No markdown, no explanation, no extra text."""
 
+# System prompt for merging multiple partial summaries into a single final summary.
 CODE_MERGE_PARTIAL_PROMPT = """You are a data consolidation expert. You will receive multiple partial project summaries.
 Merge them into a single unified JSON object with exactly these fields:
 
@@ -61,9 +63,9 @@ GROUP_SIZE = 8
 
 class CodeMergeLayer:
     """
-    Dosya özetlerini ve ilişki haritasını hiyerarşik olarak birleştirir.
-    Dosya sayısı GROUP_SIZE'dan büyükse önce gruplara böler,
-    her grubu ayrı merge eder, sonra ara sonuçları final merge'e gönderir.
+    Hierarchically merges file summaries and the relation map.
+    If the file count exceeds GROUP_SIZE, splits them into groups,
+    merges each group separately, then sends the intermediate results to a final merge.
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -73,20 +75,20 @@ class CodeMergeLayer:
         if not analyses:
             return {}
 
-        print(f"[Katman 4] {len(analyses)} dosya özeti + ilişki haritası birleştiriliyor...")
+        print(f"[Layer 4] Merging {len(analyses)} file summaries + relation map...")
 
-        # Dosya sayısı az ise direkt merge
+        # If file count is small enough, merge directly
         if len(analyses) <= GROUP_SIZE:
             return self._merge_with_relation(analyses, relation_map)
 
-        # Gruplara böl — ilk grup relation_map ile birlikte gönderilir
+        # Split into groups — the first group is sent together with the relation map
         groups = [analyses[i:i+GROUP_SIZE] for i in range(0, len(analyses), GROUP_SIZE)]
-        print(f"[Katman 4] {len(groups)} grup oluşturuldu ({GROUP_SIZE}'lik)")
+        print(f"[Layer 4] {len(groups)} groups created (size {GROUP_SIZE})")
 
         intermediate = []
         for i, group in enumerate(groups):
-            print(f"[Katman 4] Grup {i+1}/{len(groups)} merge ediliyor ({len(group)} dosya)...")
-            # Sadece ilk gruba relation_map ekle
+            print(f"[Layer 4] Merging group {i+1}/{len(groups)} ({len(group)} files)...")
+            # Only attach the relation map to the first group
             if i == 0:
                 result = self._merge_with_relation(group, relation_map)
             else:
@@ -94,12 +96,12 @@ class CodeMergeLayer:
             if result:
                 intermediate.append(result)
 
-        # Ara sonuçları final merge'e gönder
-        print(f"[Katman 4] {len(intermediate)} ara sonuç final merge'e gönderiliyor...")
+        # Send all intermediate results to the final merge
+        print(f"[Layer 4] Sending {len(intermediate)} intermediate results to final merge...")
         return self._merge_partials(intermediate)
 
     # ------------------------------------------------------------------
-    # Private merge metodları
+    # Private merge methods
     # ------------------------------------------------------------------
 
     def _merge_with_relation(self, analyses: List[Dict], relation_map: Dict) -> Dict:
@@ -111,12 +113,12 @@ class CodeMergeLayer:
             f"Merge these file summaries and relation map into one unified project summary:\n\n"
             f"{json.dumps(payload, indent=2)}"
         )
-        print(f"[Katman 4] İlk merge: {len(user_message)} karakter gönderiliyor...")
+        print(f"[Layer 4] First merge: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(config.CODE_MERGE_MODEL, CODE_MERGE_SYSTEM_PROMPT, user_message)
             return self._parse_response(response)
         except Exception as e:
-            print(f"[Katman 4] Hata: {e}")
+            print(f"[Layer 4] Error: {e}")
             return {}
 
     def _merge_files_only(self, analyses: List[Dict]) -> Dict:
@@ -124,12 +126,12 @@ class CodeMergeLayer:
             f"Merge these file summaries into one unified project summary:\n\n"
             f"{json.dumps(analyses, indent=2)}"
         )
-        print(f"[Katman 4] Grup merge: {len(user_message)} karakter gönderiliyor...")
+        print(f"[Layer 4] Group merge: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(config.CODE_MERGE_MODEL, CODE_MERGE_SYSTEM_PROMPT, user_message)
             return self._parse_response(response)
         except Exception as e:
-            print(f"[Katman 4] Hata: {e}")
+            print(f"[Layer 4] Error: {e}")
             return {}
 
     def _merge_partials(self, partials: List[Dict]) -> Dict:
@@ -139,18 +141,21 @@ class CodeMergeLayer:
             f"Merge these partial project summaries into one final summary:\n\n"
             f"{json.dumps(partials, indent=2)}"
         )
-        print(f"[Katman 4] Final merge: {len(user_message)} karakter gönderiliyor...")
+        print(f"[Layer 4] Final merge: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(config.CODE_MERGE_MODEL, CODE_MERGE_PARTIAL_PROMPT, user_message)
             return self._parse_response(response)
         except Exception as e:
-            print(f"[Katman 4] Hata: {e}")
+            print(f"[Layer 4] Error: {e}")
             return {}
 
     def _parse_response(self, response: str) -> Dict:
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
 
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end   = cleaned.rfind("}") + 1
         if start != -1 and end > start:
@@ -169,6 +174,6 @@ class CodeMergeLayer:
                 "relations":    data.get("relations", []),
             }
         except json.JSONDecodeError as e:
-            print(f"[Katman 4] JSON parse hatası: {e}")
-            print(f"[Katman 4] Yanıt sonu: {response[-200:]}")
+            print(f"[Layer 4] JSON parse error: {e}")
+            print(f"[Layer 4] Response tail: {response[-200:]}")
             return {}

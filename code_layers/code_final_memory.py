@@ -1,34 +1,26 @@
 # code_layers/code_final_memory.py
-
 import re
 from typing import Dict
 from layers.llm_client import LLMClient
 import config
 
+# System prompt for the final memory generation LLM.
+# Instructs the model to produce a structured plain-text project briefing document.
 CODE_MEMORY_SYSTEM_PROMPT = """You are a senior software architect writing a project briefing document.
 You will receive a unified JSON summary of a software project — its files, architecture, dependencies, and relationships.
-
 Write a clear, concise plain text memory document that an AI assistant can read to immediately understand this codebase.
-
 Structure it exactly like this (use these exact headers):
-
 PROJECT: <project name>
-
 PURPOSE:
 One paragraph explaining what this project does and why it exists.
-
 ARCHITECTURE:
 One paragraph explaining how the project is structured. Mention the main layers or modules and how they interact.
-
 ENTRY POINTS:
 List the main entry point files and what each one does.
-
 KEY FILES:
 List the most important files (hubs and core modules), one line each: filename — what it does.
-
 RELATIONSHIPS:
 List the key dependencies between files, one line each.
-
 Rules:
 - Write in plain text only. No markdown, no bullet points, no JSON.
 - Be concise but complete. A developer should understand the project in 30 seconds.
@@ -39,10 +31,9 @@ Rules:
 
 class CodeFinalMemoryLayer:
     """
-    Birleşik JSON proje özetini düz metin hafıza belgesine çevirir.
-
-    Girdi : CodeMergeLayer.merge() çıktısı
-    Çıktı : Düz metin proje özeti (AI'a verilecek context)
+    Converts the unified JSON project summary into a plain-text memory document.
+    Input : Output of CodeMergeLayer.merge()
+    Output: Plain-text project summary (context to be fed to the AI)
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -51,15 +42,14 @@ class CodeFinalMemoryLayer:
     def generate(self, merged: Dict) -> str:
         """
         Args:
-            merged: CodeMergeLayer.merge() çıktısı
-
+            merged: Output of CodeMergeLayer.merge()
         Returns:
-            Düz metin proje hafızası
+            Plain-text project memory document
         """
         if not merged:
             return ""
 
-        print("[Katman 5] Final kod hafızası oluşturuluyor...")
+        print("[Layer 5] Generating final code memory...")
 
         import json
         user_message = (
@@ -73,14 +63,13 @@ class CodeFinalMemoryLayer:
                 CODE_MEMORY_SYSTEM_PROMPT,
                 user_message,
             )
-            # <think> bloğunu temizle — birden fazla olabilir, nested olabilir
+            # Strip all <think>...</think> blocks — there may be multiple or nested ones
             cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
-            # Hâlâ açık <think> varsa (kapanmamış) → oradan sonrasını at
+            # If an unclosed <think> tag remains, discard everything from that point on
             if "<think>" in cleaned:
                 cleaned = cleaned[:cleaned.index("<think>")]
             cleaned = cleaned.strip()
             return cleaned
-
         except Exception as e:
-            print(f"[Katman 5] Hata: {e}")
+            print(f"[Layer 5] Error: {e}")
             return ""

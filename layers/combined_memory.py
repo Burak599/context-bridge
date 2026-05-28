@@ -61,8 +61,7 @@ Rules:
 
 class CombinedMemoryLayer:
     """
-    Chat hafızası ve kod hafızasını birleştirip
-    tek bir AI context prompt'u üretir.
+    Merges chat memory and code memory into a single AI context prompt.
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -77,18 +76,18 @@ class CombinedMemoryLayer:
     ) -> str:
         """
         Args:
-            chat_memory : FinalMemoryLayer.generate() çıktısı
-            code_memory : CodeFinalMemoryLayer.generate() çıktısı
-            detail_memory: DetailKeywordMergeLayer output text
-            code_detail_memory: CodeDetailMergeLayer output text
+            chat_memory        : Output of FinalMemoryLayer.generate()
+            code_memory        : Output of CodeFinalMemoryLayer.generate()
+            detail_memory      : Output text of DetailKeywordMergeLayer
+            code_detail_memory : Output text of CodeDetailMergeLayer
 
         Returns:
-            Birleşik AI context prompt
+            Combined AI context prompt
         """
         if not chat_memory and not code_memory and not detail_memory and not code_detail_memory:
             return ""
 
-        print("[Birleştirici] Chat, kod, detay ve parametre hafızaları birleştiriliyor...")
+        print("[Combiner] Merging chat, code, detail, and parameter memories...")
 
         source_archive = self._build_source_archive(
             chat_memory,
@@ -121,13 +120,15 @@ class CombinedMemoryLayer:
                 COMBINED_MEMORY_SYSTEM_PROMPT,
                 user_message,
             )
+            # Strip <think>...</think> chain-of-thought blocks if present
             cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+            # If an unclosed <think> tag remains, discard everything from that point on
             if "<think>" in cleaned:
                 cleaned = cleaned[:cleaned.index("<think>")]
             return self._append_source_archive(cleaned.strip(), source_archive)
 
         except Exception as e:
-            print(f"[Birleştirici] Hata: {e}")
+            print(f"[Combiner] Error: {e}")
             return ""
 
     def _build_source_archive(

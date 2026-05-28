@@ -1,16 +1,15 @@
 # code_layers/code_relation_layer.py
-
 import json
 import re
 from typing import List, Dict
 from layers.llm_client import LLMClient
 import config
 
+# System prompt for the relation analyzer LLM.
+# Instructs the model to produce a high-level architecture and dependency map.
 RELATION_SYSTEM_PROMPT = """You are a software architect. You will receive a list of JSON summaries, one per file in a project.
 Your job is to analyze the relationships between these files and produce a high-level architecture map.
-
 Return ONLY a JSON object with exactly these fields:
-
 {
   "architecture": "one paragraph describing the overall project structure and how it works",
   "core_modules": ["list of the most critical files the project depends on"],
@@ -21,7 +20,6 @@ Return ONLY a JSON object with exactly these fields:
   ],
   "hubs": ["files that are imported by many others — central dependencies"]
 }
-
 Rules:
 - "relations" should be human-readable strings, not nested objects.
 - Focus on project-internal relationships only. Ignore stdlib and third-party libs.
@@ -32,11 +30,10 @@ Rules:
 
 class CodeRelationLayer:
     """
-    Tüm dosya özetlerini birlikte analiz eder ve
-    dosyalar arası bağımlılık haritası çıkarır.
-
-    Girdi : CodeAnalyzerLayer.analyze_all() çıktısı
-    Çıktı : Bağımlılık haritası dict'i
+    Analyzes all file summaries together and produces
+    a cross-file dependency map.
+    Input : Output of CodeAnalyzerLayer.analyze_all()
+    Output: Dependency map dict
     """
 
     def __init__(self, llm_client: LLMClient):
@@ -45,8 +42,7 @@ class CodeRelationLayer:
     def map(self, analyses: List[Dict]) -> Dict:
         """
         Args:
-            analyses: CodeAnalyzerLayer.analyze_all() çıktısı
-
+            analyses: Output of CodeAnalyzerLayer.analyze_all()
         Returns:
             {
                 "architecture": str,
@@ -59,6 +55,7 @@ class CodeRelationLayer:
         if not analyses:
             return {}
 
+        # Single-file project: build a minimal map without calling the LLM
         if len(analyses) == 1:
             return {
                 "architecture": analyses[0].get("purpose", ""),
@@ -68,13 +65,11 @@ class CodeRelationLayer:
                 "hubs":         [],
             }
 
-        print(f"[Katman 3] {len(analyses)} dosya özeti ilişki analizine gönderiliyor...")
-
+        print(f"[Layer 3] Sending {len(analyses)} file summaries to relation analysis...")
         user_message = (
             f"Analyze the relationships between these {len(analyses)} files:\n\n"
             f"{json.dumps(analyses, indent=2)}"
         )
-
         try:
             response = self.llm.chat(
                 config.CODE_RELATION_MODEL,
@@ -82,9 +77,8 @@ class CodeRelationLayer:
                 user_message,
             )
             return self._parse_response(response)
-
         except Exception as e:
-            print(f"[Katman 3] Hata: {e}")
+            print(f"[Layer 3] Error: {e}")
             return {}
 
     # ------------------------------------------------------------------
@@ -92,9 +86,10 @@ class CodeRelationLayer:
     # ------------------------------------------------------------------
 
     def _parse_response(self, response: str) -> Dict:
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
-
         try:
             data = json.loads(cleaned)
             return {
@@ -105,5 +100,5 @@ class CodeRelationLayer:
                 "hubs":         data.get("hubs", []),
             }
         except json.JSONDecodeError:
-            print(f"[Katman 3] JSON parse hatası, ham yanıt: {response[:100]}")
+            print(f"[Layer 3] JSON parse error, raw response: {response[:100]}")
             return {}

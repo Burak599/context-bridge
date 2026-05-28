@@ -1,5 +1,4 @@
 # layers/merge_layer.py
-
 import json
 import re
 from typing import List, Dict
@@ -44,29 +43,29 @@ class MergeLayer:
         """
         Args:
             analyses: ChunkAnalyzePipeline output
-
         Returns:
             List of merged JSON dicts, one per group.
             FinalMemoryLayer will summarize each and combine.
         """
         if not analyses:
             return []
+
         if len(analyses) <= GROUP_SIZE:
-            print(f"[Katman 4] {len(analyses)} chunk → tek grup merge...")
-            result = self._merge_group(analyses, label="Grup 1")
+            print(f"[Layer 4] {len(analyses)} chunks → single group merge...")
+            result = self._merge_group(analyses, label="Group 1")
             return [result] if result else []
 
         groups = [analyses[i:i+GROUP_SIZE] for i in range(0, len(analyses), GROUP_SIZE)]
-        print(f"[Katman 4] {len(analyses)} chunk → {len(groups)} grup ({GROUP_SIZE}'lik)")
+        print(f"[Layer 4] {len(analyses)} chunks → {len(groups)} groups (size {GROUP_SIZE})")
 
         results = []
         for i, group in enumerate(groups):
-            print(f"[Katman 4] Grup {i+1}/{len(groups)} merge ediliyor ({len(group)} chunk)...")
-            result = self._merge_group(group, label=f"Grup {i+1}")
+            print(f"[Layer 4] Merging group {i+1}/{len(groups)} ({len(group)} chunks)...")
+            result = self._merge_group(group, label=f"Group {i+1}")
             if result:
                 results.append(result)
 
-        print(f"[Katman 4] ✓ {len(results)} grup JSON'u oluşturuldu.")
+        print(f"[Layer 4] ✓ {len(results)} group JSON(s) created.")
         return results
 
     def _merge_group(self, analyses: List[Dict], label: str = "") -> Dict:
@@ -76,8 +75,7 @@ class MergeLayer:
             return analyses[0]
 
         user_message = f"Merge these conversation analyses into one:\n\n{json.dumps(analyses, indent=2)}"
-        print(f"[Katman 4] {label}: {len(user_message)} karakter gönderiliyor...")
-
+        print(f"[Layer 4] {label}: sending {len(user_message)} characters...")
         try:
             response = self.llm.chat(
                 config.LAYER_4_MODEL,
@@ -86,13 +84,16 @@ class MergeLayer:
             )
             return self._parse_response(response)
         except Exception as e:
-            print(f"[Katman 4] {label} hata: {e}")
+            print(f"[Layer 4] {label} error: {e}")
             return {}
 
     def _parse_response(self, response: str) -> Dict:
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
 
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end   = cleaned.rfind("}") + 1
         if start != -1 and end > start:
@@ -101,6 +102,6 @@ class MergeLayer:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
-            print(f"[Katman 4] JSON parse hatası: {e}")
-            print(f"[Katman 4] Yanıt sonu: {response[-200:]}")
+            print(f"[Layer 4] JSON parse error: {e}")
+            print(f"[Layer 4] Response tail: {response[-200:]}")
             return {}

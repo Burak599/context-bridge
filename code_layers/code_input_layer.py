@@ -3,7 +3,7 @@
 import os
 from typing import List, Dict
 
-# Taranmayacak klasörler
+# Directories to exclude from scanning
 EXCLUDED_DIRS = {
     "__pycache__", ".git", ".venv", "venv", "env", ".env",
     "node_modules", ".idea", ".vscode", "dist", "build",
@@ -11,7 +11,7 @@ EXCLUDED_DIRS = {
     ".eggs", "*.egg-info",
 }
 
-# Taranacak uzantılar
+# File extensions to include in scanning
 INCLUDED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx",
     ".java", ".cpp", ".c", ".h", ".cs",
@@ -19,26 +19,26 @@ INCLUDED_EXTENSIONS = {
     ".kt", ".scala", ".r", ".m",
 }
 
-# Atlanacak dosyalar
+# Files to skip entirely
 EXCLUDED_FILES = {
-    "__init__.py",         # genellikle boş
+    "__init__.py",         # usually empty
     "setup.py",
     "conftest.py",
 }
 
-# Tek dosya max karakter (çok büyük dosyaları kırp)
+# Max characters per file (truncate files that exceed this limit)
 MAX_FILE_CHARS = 30000
 
 
 class CodeInputLayer:
     """
-    Verilen proje klasörünü tarar, kod dosyalarını okur ve
-    sıralı bir liste halinde döner.
+    Scans the given project directory, reads source files, and
+    returns them as an ordered list.
 
-    Sıralama mantığı:
-    1. Ana giriş noktaları önce (main.py, app.py, index.py vb.)
-    2. Sonra klasör derinliğine göre (sığ önce)
-    3. Sonra alfabetik
+    Sorting logic:
+    1. Main entry points first (main.py, app.py, index.py, etc.)
+    2. Then by directory depth (shallower first)
+    3. Then alphabetically
     """
 
     ENTRY_POINTS = {
@@ -56,27 +56,27 @@ class CodeInputLayer:
 
     def scan(self, project_path: str) -> List[Dict]:
         """
-        Klasörü tarar ve sıralı dosya listesi döner.
+        Scans the directory and returns a sorted list of file dicts.
 
         Args:
-            project_path: Proje kök klasörünün yolu
+            project_path: Path to the project root directory
 
         Returns:
             [
                 {
-                    "index":     1,               # sıra numarası
-                    "path":      "layers/foo.py", # proje köküne göre relatif
-                    "abs_path":  "/full/path...", # mutlak yol
+                    "index":     1,               # sequential number
+                    "path":      "layers/foo.py", # relative to project root
+                    "abs_path":  "/full/path...", # absolute path
                     "extension": ".py",
                     "size_chars": 1234,
-                    "content":   "...",           # dosya içeriği (kırpılmış olabilir)
-                    "truncated": False,           # içerik kırpıldı mı?
+                    "content":   "...",           # file content (may be truncated)
+                    "truncated": False,           # was the content truncated?
                 },
                 ...
             ]
         """
         if not os.path.isdir(project_path):
-            raise ValueError(f"[CodeInputLayer] Geçersiz klasör: {project_path}")
+            raise ValueError(f"[CodeInputLayer] Invalid directory: {project_path}")
 
         raw_files = self._collect_files(project_path)
         sorted_files = self._sort_files(raw_files)
@@ -101,12 +101,12 @@ class CodeInputLayer:
     # ------------------------------------------------------------------
 
     def _collect_files(self, project_path: str) -> List[Dict]:
-        """Klasörü özyinelemeli tarar, uygun dosyaları toplar."""
+        """Recursively walks the directory and collects eligible files."""
         files = []
         project_path = os.path.abspath(project_path)
 
         for root, dirs, filenames in os.walk(project_path):
-            # Hariç tutulan klasörleri atla (yerinde filtrele)
+            # Filter out excluded directories in-place
             dirs[:] = [
                 d for d in dirs
                 if d not in EXCLUDED_DIRS and not d.startswith(".")
@@ -135,9 +135,9 @@ class CodeInputLayer:
 
     def _sort_files(self, files: List[Dict]) -> List[Dict]:
         """
-        Sıralama:
-        0 → giriş noktaları (main.py vb.)
-        1 → diğerleri (derinlik, sonra alfabetik)
+        Sorting priority:
+        0 → entry points (main.py, etc.)
+        1 → everything else (by depth, then alphabetically)
         """
         def sort_key(f):
             is_entry = 0 if f["filename"] in self.ENTRY_POINTS else 1
@@ -147,7 +147,7 @@ class CodeInputLayer:
 
     def _read_file(self, abs_path: str):
         """
-        Dosyayı okur. Çok büyükse kırpar.
+        Reads a file. Truncates if it exceeds the character limit.
 
         Returns:
             (content: str, truncated: bool)
@@ -156,11 +156,11 @@ class CodeInputLayer:
             with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except Exception as e:
-            return f"[OKUNAMADI: {e}]", False
+            return f"[UNREADABLE: {e}]", False
 
         if len(content) > self.max_file_chars:
             content = content[: self.max_file_chars]
-            content += f"\n\n... [DOSYA KISALTI LDI — ilk {self.max_file_chars} karakter gösteriliyor]"
+            content += f"\n\n... [FILE TRUNCATED — showing first {self.max_file_chars} characters]"
             return content, True
 
         return content, False

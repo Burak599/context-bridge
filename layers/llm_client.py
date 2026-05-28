@@ -1,5 +1,4 @@
 # layers/llm_client.py
-
 import time
 from groq import Groq, RateLimitError, InternalServerError
 import config
@@ -7,10 +6,10 @@ import config
 
 class LLMClient:
     """
-    Groq API için ortak arayüz.
-    Her katman kendi model adını geçirerek kullanır.
-    Rate limit hatalarında otomatik retry + exponential backoff uygular.
-    413 (Groq'ta TPM rate limit) ve 429 her ikisi de yakalanır.
+    Common interface for the Groq API.
+    Each layer passes its own model name when calling.
+    Automatically retries with exponential backoff on rate limit errors.
+    Both 413 (Groq TPM rate limit) and 429 are caught and retried.
     """
 
     MAX_RETRIES = 10000000
@@ -21,11 +20,10 @@ class LLMClient:
 
     def __init__(self):
         self._client = Groq(api_key=config.get_groq_key())
-        print(f"[LLM Client] Groq aktif.")
+        print(f"[LLM Client] Groq active.")
 
     def chat(self, model: str, system_prompt: str, user_message: str) -> str:
         last_error = None
-
         for attempt in range(self.MAX_RETRIES):
             try:
                 dynamic_max_tokens = self._compute_max_tokens(system_prompt, user_message)
@@ -43,21 +41,20 @@ class LLMClient:
             except RateLimitError as e:
                 last_error = e
                 wait = self.BASE_WAIT ** attempt
-                print(f"[LLM Client] Rate limit (429) — {wait}s bekleniyor... (deneme {attempt + 1}/{self.MAX_RETRIES})")
+                print(f"[LLM Client] Rate limit (429) — waiting {wait}s... (attempt {attempt + 1}/{self.MAX_RETRIES})")
                 time.sleep(wait)
 
             except InternalServerError as e:
                 last_error = e
                 wait = self.BASE_WAIT ** attempt
-                print(f"[LLM Client] Sunucu hatası — {wait}s bekleniyor... (deneme {attempt + 1}/{self.MAX_RETRIES})")
+                print(f"[LLM Client] Server error — waiting {wait}s... (attempt {attempt + 1}/{self.MAX_RETRIES})")
                 time.sleep(wait)
 
             except Exception as e:
-                err = str(e)
-                # Groq'ta 413 = TPM rate limit, retry'a alınmalı
+                # 413 on Groq = TPM rate limit, should be retried
                 raise e
 
-        raise Exception(f"[LLM Client] {self.MAX_RETRIES} denemede başarısız. Son hata: {last_error}")
+        raise Exception(f"[LLM Client] Failed after {self.MAX_RETRIES} attempts. Last error: {last_error}")
 
     def _compute_max_tokens(self, system_prompt: str, user_message: str) -> int:
         """

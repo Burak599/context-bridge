@@ -1,13 +1,13 @@
 # layers/pipeline.py
 #
-# Chunking ve Analyzing'i aynı anda çalıştırır.
-# Chunking bir blok bitirince Analyzer hemen alır — beklemez.
+# Runs Chunking and Analyzing concurrently.
+# As soon as a block finishes chunking, the Analyzer picks it up immediately.
 #
-# Akış:
-#   messages → ChunkingLayer (blokları paralel işler)
-#             → Queue (her chunk hazır olunca koyar)
-#             → ChunkAnalyzer (queue'dan alır, paralel analiz eder)
-#             → sıralı analizler listesi
+# Flow:
+#   messages → ChunkingLayer (processes blocks in parallel)
+#             → Queue (puts each chunk as soon as it is ready)
+#             → ChunkAnalyzer (reads from queue, analyzes in parallel)
+#             → ordered list of analyses
 
 import asyncio
 from typing import List, Dict
@@ -17,7 +17,7 @@ import config
 import re
 import json
 
-# ---- Chunking sabitleri ----
+# ---- Chunking constants ----
 CHUNKING_SYSTEM_PROMPT = """You are a topic-change detector for conversations.
 You will receive a numbered list of conversation exchanges.
 Your job is to find where the topic significantly changes.
@@ -30,7 +30,7 @@ Rules:
 Example response: [6, 12]
 Return ONLY the JSON array. No explanation. No markdown. No extra text."""
 
-# ---- Analyzer sabitleri ----
+# ---- Analyzer constants ----
 ANALYZER_SYSTEM_PROMPT = """You are a conversation analyst. You will receive a conversation chunk and extract the most important information from it.
 Return ONLY a JSON object with exactly these fields:
 {
@@ -66,13 +66,13 @@ MAX_CONCURRENT_ANALYZE = 3
 MAX_RETRIES = 6
 BASE_WAIT   = 2
 
-SENTINEL = None  # queue'nun bittiğini işaret eder
+SENTINEL = None  # signals that the queue is done
 
 
 class ChunkAnalyzePipeline:
     """
-    Chunking ve Analyzing'i pipeline şeklinde çalıştırır.
-    Bir chunk hazır olur olmaz Analyzer'a gönderilir.
+    Runs Chunking and Analyzing as a pipeline.
+    Each chunk is sent to the Analyzer as soon as it is ready.
     """
 
     def __init__(self, max_tokens_per_block=2000, overlap_messages=3, min_chunk_size=2):
@@ -82,7 +82,7 @@ class ChunkAnalyzePipeline:
         self._client  = AsyncGroq(api_key=config.get_groq_key())
 
     def run(self, messages: List[Dict]) -> List[Dict]:
-        """Ana giriş noktası. Sync wrapper."""
+        """Main entry point. Sync wrapper around the async pipeline."""
         return asyncio.run(self._run_async(messages))
 
     # ------------------------------------------------------------------
@@ -94,50 +94,50 @@ class ChunkAnalyzePipeline:
             return []
 
         blocks = self._build_blocks(messages)
-        print(f"[Pipeline] {len(messages)} mesaj → {len(blocks)} blok")
+        print(f"[Pipeline] {len(messages)} messages → {len(blocks)} blocks")
 
-        # Queue: chunking sonuçlarını analyzer'a taşır
-        # Her item: (chunk_index, chunk_text) veya SENTINEL
+        # Queue: carries chunking results to the analyzer.
+        # Each item: (chunk_index, chunk_text) or SENTINEL
         queue = asyncio.Queue()
 
-        # Önce kaç chunk çıkacağını bilmiyoruz, producer bitince SENTINEL koyar
+        # We don't know the total chunk count upfront; producer puts SENTINEL when done.
         chunk_semaphore   = asyncio.Semaphore(MAX_CONCURRENT_CHUNK)
         analyze_semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYZE)
 
-        # Sonuçları sırayla toplamak için dict (chunk_index → analiz)
+        # Dict to collect results in order (chunk_index → analysis)
         results: Dict[int, Dict] = {}
 
-        # Producer ve Consumer aynı anda başlar
+        # Producer and consumer start at the same time
         await asyncio.gather(
             self._producer(messages, blocks, queue, chunk_semaphore),
             self._consumer(queue, analyze_semaphore, results),
         )
 
-        # chunk_index sırasına göre sırala
+        # Sort by chunk_index before returning
         sorted_results = [results[i] for i in sorted(results.keys())]
         return sorted_results
 
     async def _producer(self, messages, blocks, queue, semaphore):
         """
-        Her bloğu paralel olarak LLM'e gönderir.
-        Her chunk hazır olunca queue'ya koyar.
-        Tüm bloklar bitince SENTINEL koyar.
+        Sends each block to the LLM in parallel.
+        Puts each finished chunk into the queue immediately.
+        Puts SENTINEL when all blocks are done.
         """
-        chunk_counter = [0]  # mutable sayaç
+        chunk_counter = [0]  # mutable counter
 
         async def process_block(block_msgs, offset, idx, total):
             async with semaphore:
-                print(f"[Pipeline | Chunking] Blok {idx}/{total} işleniyor...")
+                print(f"[Pipeline | Chunking] Processing block {idx}/{total}...")
                 breaks = await self._detect_breaks(block_msgs, idx, total)
 
-                # Break point'lere göre chunk'ları üret
+                # Produce chunks from the detected break points
                 chunks = self._split_block(block_msgs, offset, breaks, messages)
                 for chunk_msgs in chunks:
                     chunk_text = self._msgs_to_text(chunk_msgs)
                     chunk_idx  = chunk_counter[0]
                     chunk_counter[0] += 1
                     await queue.put((chunk_idx, chunk_text))
-                    print(f"[Pipeline | Chunking] Chunk {chunk_idx + 1} queue'ya eklendi")
+                    print(f"[Pipeline | Chunking] Chunk {chunk_idx + 1} added to queue")
 
         tasks = [
             process_block(block_msgs, offset, i + 1, len(blocks))
@@ -145,14 +145,14 @@ class ChunkAnalyzePipeline:
         ]
         await asyncio.gather(*tasks)
 
-        # Bitti sinyali
+        # Signal that all blocks have been processed
         await queue.put(SENTINEL)
-        print(f"[Pipeline | Chunking] ✓ Tüm bloklar işlendi, toplam {chunk_counter[0]} chunk")
+        print(f"[Pipeline | Chunking] ✓ All blocks processed, total {chunk_counter[0]} chunks")
 
     async def _consumer(self, queue, semaphore, results):
         """
-        Queue'dan chunk'ları alır, paralel analiz eder.
-        SENTINEL gelince durur.
+        Reads chunks from the queue and analyzes them in parallel.
+        Stops when SENTINEL is received.
         """
         analyze_tasks = []
 
@@ -161,16 +161,16 @@ class ChunkAnalyzePipeline:
             if item is SENTINEL:
                 break
             chunk_idx, chunk_text = item
-            # Her chunk için hemen bir analiz task'ı başlat
+            # Immediately start an analysis task for each chunk
             task = asyncio.create_task(
                 self._analyze_chunk(chunk_idx, chunk_text, semaphore, results)
             )
             analyze_tasks.append(task)
 
-        # Tüm analiz task'larının bitmesini bekle
+        # Wait for all analysis tasks to finish
         if analyze_tasks:
             await asyncio.gather(*analyze_tasks)
-        print(f"[Pipeline | Analyzer] ✓ Tüm chunk'lar analiz edildi")
+        print(f"[Pipeline | Analyzer] ✓ All chunks analyzed")
 
     # ------------------------------------------------------------------
     # Chunking helpers
@@ -195,15 +195,17 @@ class ChunkAnalyzePipeline:
             except Exception as e:
                 if "rate_limit" in str(e) or "429" in str(e):
                     wait = BASE_WAIT ** attempt
-                    print(f"[Pipeline | Chunking] Blok {idx} rate limit — {wait}s bekle...")
+                    print(f"[Pipeline | Chunking] Block {idx} rate limit — waiting {wait}s...")
                     await asyncio.sleep(wait)
                 else:
-                    print(f"[Pipeline | Chunking] Blok {idx} hata: {e}")
+                    print(f"[Pipeline | Chunking] Block {idx} error: {e}")
                     return []
         return []
 
     def _parse_breaks(self, response: str) -> List[int]:
+        # Strip <think>...</think> chain-of-thought blocks if present
         response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned  = re.sub(r"```(?:json)?", "", response).replace("```", "").strip()
         match    = re.search(r"\[.*?\]", cleaned, re.DOTALL)
         if not match:
@@ -234,7 +236,7 @@ class ChunkAnalyzePipeline:
         return "\n\n".join(lines)
 
     def _split_block(self, block_msgs, offset, exchange_breaks, all_messages):
-        """Exchange break noktalarını global mesaj indekslerine çevir, sonra böl."""
+        """Converts exchange break points to global message indices, then splits."""
         msg_breaks = []
         exchange_num = 1
         msg_idx = 0
@@ -252,7 +254,7 @@ class ChunkAnalyzePipeline:
                 i += 1
             exchange_num += 1
 
-        # Bu blok için global mesajları break'lere göre böl
+        # Split global messages for this block by break points
         start = offset
         end   = offset + len(block_msgs) - (self.overlap if offset > 0 else 0)
         block_global = list(range(start, min(end, len(all_messages))))
@@ -312,7 +314,7 @@ class ChunkAnalyzePipeline:
 
     async def _analyze_chunk(self, chunk_idx, chunk_text, semaphore, results):
         async with semaphore:
-            print(f"[Pipeline | Analyzer] Chunk {chunk_idx + 1} analiz ediliyor...")
+            print(f"[Pipeline | Analyzer] Analyzing chunk {chunk_idx + 1}...")
             user_message = f"Analyze this conversation chunk:\n\n{chunk_text}"
 
             for attempt in range(MAX_RETRIES):
@@ -332,18 +334,21 @@ class ChunkAnalyzePipeline:
                 except Exception as e:
                     if "rate_limit" in str(e) or "429" in str(e):
                         wait = BASE_WAIT ** attempt
-                        print(f"[Pipeline | Analyzer] Chunk {chunk_idx + 1} rate limit — {wait}s bekle...")
+                        print(f"[Pipeline | Analyzer] Chunk {chunk_idx + 1} rate limit — waiting {wait}s...")
                         await asyncio.sleep(wait)
                     else:
-                        print(f"[Pipeline | Analyzer] Chunk {chunk_idx + 1} hata: {e}")
+                        print(f"[Pipeline | Analyzer] Chunk {chunk_idx + 1} error: {e}")
                         results[chunk_idx] = self._empty_analysis(chunk_idx + 1)
                         return
 
             results[chunk_idx] = self._empty_analysis(chunk_idx + 1)
 
     def _parse_analysis(self, response: str, chunk_number: int) -> Dict:
+        # Strip <think>...</think> chain-of-thought blocks if present
         cleaned = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+        # Remove markdown code fences if the model wrapped the JSON
         cleaned = re.sub(r"```(?:json)?", "", cleaned).replace("```", "").strip()
+        # Extract the outermost JSON object
         start = cleaned.find("{")
         end   = cleaned.rfind("}") + 1
         if start != -1 and end > start:
@@ -351,7 +356,7 @@ class ChunkAnalyzePipeline:
         try:
             data = json.loads(cleaned)
             context = data.get("context", "")
-            print(f"  [Chunk {chunk_number}] context: {len(context)} karakter")  # ← bunu ekle
+            print(f"  [Chunk {chunk_number}] context: {len(context)} characters")
             return {
                 "chunk_number":   chunk_number,
                 "topic":          data.get("topic", ""),
@@ -361,7 +366,7 @@ class ChunkAnalyzePipeline:
                 "context":        context,
             }
         except json.JSONDecodeError:
-            print(f"[Pipeline | Analyzer] JSON parse hatası (chunk {chunk_number})")
+            print(f"[Pipeline | Analyzer] JSON parse error (chunk {chunk_number})")
             return self._empty_analysis(chunk_number)
 
     def _empty_analysis(self, chunk_number: int) -> Dict:

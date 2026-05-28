@@ -16,99 +16,99 @@ def main():
     print("=" * 55)
     print("        CODE MEMORY SYSTEM — MVP")
     print("=" * 55)
-    print(f"\n[Girdi] Proje klasörü: {os.path.abspath(project_path)}")
+    print(f"\n[Input] Project folder: {os.path.abspath(project_path)}")
 
     if not os.path.isdir(project_path):
-        print(f"\n[HATA] '{project_path}' bir klasör değil!")
+        print(f"\n[ERROR] '{project_path}' is not a directory!")
         sys.exit(1)
 
     # ----------------------------------------------------------------
-    # KATMAN 1: Code Input Layer
+    # LAYER 1: Code Input Layer
     # ----------------------------------------------------------------
-    print("\n[Katman 1] Proje taranıyor...")
+    print("\n[Layer 1] Scanning project...")
     scanner = CodeInputLayer()
 
     try:
         files = scanner.scan(project_path)
     except ValueError as e:
-        print(f"\n[HATA] {e}")
+        print(f"\n[ERROR] {e}")
         sys.exit(1)
 
     if not files:
-        print("\n[HATA] Hiç kod dosyası bulunamadı!")
+        print("\n[ERROR] No code files found!")
         sys.exit(1)
 
-    print(f"[Katman 1] ✓ {len(files)} dosya bulundu.")
-    print("\n--- Bulunan Dosyalar ---")
+    print(f"[Layer 1] ✓ Found {len(files)} files.")
+    print("\n--- Found Files ---")
     for f in files:
-        truncated_flag = " [KISALTILDI]" if f["truncated"] else ""
-        print(f"  [{f['index']:02d}] {f['path']:<45} {f['size_chars']:>6} karakter{truncated_flag}")
+        truncated_flag = " [TRUNCATED]" if f["truncated"] else ""
+        print(f"  [{f['index']:02d}] {f['path']:<45} {f['size_chars']:>6} characters{truncated_flag}")
 
     # ----------------------------------------------------------------
-    # KATMAN 2: Code Analyzer
+    # LAYER 2: Code Analyzer
     # ----------------------------------------------------------------
-    print("\n[Katman 2] Dosyalar analiz ediliyor...")
+    print("\n[Layer 2] Analyzing files...")
     llm      = LLMClient()
     analyzer = CodeAnalyzerLayer(llm_client=llm)
     analyses = analyzer.analyze_all(files)
 
-    print(f"\n[Katman 2] ✓ {len(analyses)} dosya analiz edildi.")
-    print("\n--- Dosya Analizleri ---")
+    print(f"\n[Layer 2] ✓ Analyzed {len(analyses)} files.")
+    print("\n--- File Analyses ---")
     for a in analyses:
         print(f"\n  {a['file']}")
-        print(f"    Amaç         : {a['purpose']}")
-        print(f"    Class'lar    : {a['classes']}")
-        print(f"    Fonksiyonlar : {a['functions']}")
-        print(f"    Bağımlılıklar: {a['dependencies']}")
+        print(f"    Purpose      : {a['purpose']}")
+        print(f"    Classes      : {a['classes']}")
+        print(f"    Functions    : {a['functions']}")
+        print(f"    Dependencies : {a['dependencies']}")
         if a["notes"]:
-            print(f"    Notlar       : {a['notes']}")
+            print(f"    Notes        : {a['notes']}")
 
     # ----------------------------------------------------------------
-    # KATMAN 3: Relation Layer
+    # LAYER 3: Relation Layer
     # ----------------------------------------------------------------
-    print("\n[Katman 3] Dosyalar arası ilişkiler analiz ediliyor...")
+    print("\n[Layer 3] Analyzing relationships between files...")
     relation_layer = CodeRelationLayer(llm_client=llm)
     relation_map   = relation_layer.map(analyses)
 
-    print("\n[Katman 3] ✓ İlişki haritası oluşturuldu.")
-    print("\n--- İlişki Haritası ---")
-    print(f"\n  Mimari    : {relation_map.get('architecture', '')}")
-    print(f"  Hub'lar   : {relation_map.get('hubs', [])}")
-    print(f"  Giriş Nokt: {relation_map.get('entry_points', [])}")
+    print("\n[Layer 3] ✓ Relationship map created.")
+    print("\n--- Relationship Map ---")
+    print(f"\n  Architecture : {relation_map.get('architecture', '')}")
+    print(f"  Hubs         : {relation_map.get('hubs', [])}")
+    print(f"  Entry Points : {relation_map.get('entry_points', [])}")
     print(f"  Core Mod. : {relation_map.get('core_modules', [])}")
-    print(f"\n  İlişkiler :")
+    print(f"\n  Relations :")
     for r in relation_map.get("relations", []):
         print(f"    • {r}")
 
     # ----------------------------------------------------------------
-    # KATMAN 4: Code Merge Layer
+    # LAYER 4: Code Merge Layer
     # ----------------------------------------------------------------
-    print("\n[Katman 4] Özetler birleştiriliyor...")
+    print("\n[Layer 4] Merging summaries...")
     merge_layer = CodeMergeLayer(llm_client=llm)
     merged      = merge_layer.merge(analyses, relation_map)
 
-    print("\n[Katman 4] ✓ Birleştirildi.")
-    print("\n--- Birleşik Proje Özeti ---")
-    print(f"\n  Proje Adı  : {merged.get('project_name', '')}")
-    print(f"  Amaç       : {merged.get('purpose', '')}")
-    print(f"  Hub'lar    : {merged.get('hubs', [])}")
-    print(f"  Core Mod.  : {merged.get('core_modules', [])}")
-    print(f"  Giriş Nokt.: {merged.get('entry_points', [])}")
+    print("\n[Layer 4] ✓ Merged.")
+    print("\n--- Unified Project Summary ---")
+    print(f"\n  Project Name : {merged.get('project_name', '')}")
+    print(f"  Purpose      : {merged.get('purpose', '')}")
+    print(f"  Hubs         : {merged.get('hubs', [])}")
+    print(f"  Core Mod.    : {merged.get('core_modules', [])}")
+    print(f"  Entry Points : {merged.get('entry_points', [])}")
 
     # ----------------------------------------------------------------
-    # KATMAN 5: Code Final Memory
+    # LAYER 5: Code Final Memory
     # ----------------------------------------------------------------
-    print("\n[Katman 5] Final hafıza oluşturuluyor...")
+    print("\n[Layer 5] Generating final memory...")
     final_memory_layer = CodeFinalMemoryLayer(llm_client=llm)
     memory = final_memory_layer.generate(merged)
 
-    print("\n[Katman 5] ✓ Hafıza oluşturuldu.")
+    print("\n[Layer 5] ✓ Memory generated.")
     print("\n" + "=" * 55)
-    print("           FINAL KOD HAFIZASI")
+    print("           FINAL CODE MEMORY")
     print("=" * 55)
     print(f"\n{memory}")
     print("\n" + "=" * 55)
-    print("Pipeline tamamlandı — tüm katmanlar aktif")
+    print("Pipeline completed — all layers active")
     print("=" * 55)
 
 
