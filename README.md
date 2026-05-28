@@ -19,7 +19,7 @@ This project is an MVP and is open to contributions. The architecture, prompts, 
 ## Project Structure 📁
 
 ```text
-ai-project-memory/
+context-bridge/
 ├── main.py                     # Runs only the chat memory pipeline
 ├── main_code.py                # Runs only the code memory pipeline
 ├── main_combined.py            # Runs chat + code + detail pipelines together
